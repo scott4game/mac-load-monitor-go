@@ -1,0 +1,4 @@
+.env
+mac-load-monitor
+*.log
+.DS_Store
