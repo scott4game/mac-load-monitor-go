@@ -17,22 +17,24 @@ type messageNotifier interface {
 }
 
 type Monitor struct {
-	config        Config
-	collector     sampleCollector
-	notifier      messageNotifier
-	logger        *log.Logger
-	now           func() time.Time
-	wasOverloaded bool
-	lastSampleAt  time.Time
+	config          Config
+	collector       sampleCollector
+	notifier        messageNotifier
+	specialNotifier messageNotifier
+	logger          *log.Logger
+	now             func() time.Time
+	wasOverloaded   bool
+	lastSampleAt    time.Time
 }
 
-func NewMonitor(config Config, collector sampleCollector, notifier messageNotifier, logger *log.Logger) *Monitor {
+func NewMonitor(config Config, collector sampleCollector, notifier messageNotifier, specialNotifier messageNotifier, logger *log.Logger) *Monitor {
 	return &Monitor{
-		config:    config,
-		collector: collector,
-		notifier:  notifier,
-		logger:    logger,
-		now:       time.Now,
+		config:          config,
+		collector:       collector,
+		notifier:        notifier,
+		specialNotifier: specialNotifier,
+		logger:          logger,
+		now:             time.Now,
 	}
 }
 
@@ -99,7 +101,13 @@ func (monitor *Monitor) collectAndHandle(ctx context.Context, reportDue bool) {
 	case monitor.wasOverloaded:
 		status = "已恢复"
 	}
-	sent := monitor.notifier.Send(ctx, FormatMessage(monitor.config, sample, status, breaches))
+	messageConfig := monitor.config
+	notifier := monitor.notifier
+	if overloaded {
+		messageConfig = monitor.config.Special()
+		notifier = monitor.specialNotifier
+	}
+	sent := notifier.Send(ctx, FormatMessage(messageConfig, sample, status, breaches))
 	monitor.logger.Printf("INFO %s推送%s", status, map[bool]string{true: "成功", false: "失败"}[sent])
 	monitor.wasOverloaded = overloaded
 }

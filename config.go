@@ -15,6 +15,9 @@ type Config struct {
 	WebhookURL                      string
 	WebhookSecret                   string
 	Keyword                         string
+	SpecialWebhookURL               string
+	SpecialWebhookSecret            string
+	SpecialKeyword                  string
 	CheckInterval                   time.Duration
 	ReportInterval                  time.Duration
 	CPUThresholdPercent             float64
@@ -42,9 +45,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	config := Config{
-		WebhookURL:    value("FEISHU_WEBHOOK_URL", ""),
-		WebhookSecret: value("FEISHU_WEBHOOK_SECRET", ""),
-		Keyword:       value("FEISHU_KEYWORD", "Mac 负载监控"),
+		WebhookURL:           value("FEISHU_WEBHOOK_URL", ""),
+		WebhookSecret:        value("FEISHU_WEBHOOK_SECRET", ""),
+		Keyword:              value("FEISHU_KEYWORD", "Mac 负载监控"),
+		SpecialWebhookURL:    value("SPECIAL_FEISHU_WEBHOOK_URL", ""),
+		SpecialWebhookSecret: value("SPECIAL_FEISHU_WEBHOOK_SECRET", ""),
+		SpecialKeyword:       value("SPECIAL_FEISHU_KEYWORD", "Mac 特别告警"),
 	}
 	if config.CheckInterval, err = parseDuration(value("CHECK_INTERVAL", "10m"), "CHECK_INTERVAL"); err != nil {
 		return Config{}, err
@@ -73,16 +79,35 @@ func LoadConfig(path string) (Config, error) {
 	if config.Keyword == "" {
 		return Config{}, fmt.Errorf("FEISHU_KEYWORD 不能为空")
 	}
+	if config.SpecialKeyword == "" {
+		return Config{}, fmt.Errorf("SPECIAL_FEISHU_KEYWORD 不能为空")
+	}
 	return config, nil
 }
 
+func (config Config) Special() Config {
+	special := config
+	special.WebhookURL = config.SpecialWebhookURL
+	special.WebhookSecret = config.SpecialWebhookSecret
+	special.Keyword = config.SpecialKeyword
+	return special
+}
+
 func (config Config) ValidateWebhook() error {
-	if config.WebhookURL == "" {
-		return fmt.Errorf("FEISHU_WEBHOOK_URL 不能为空")
+	return validateWebhookURL(config.WebhookURL, "FEISHU_WEBHOOK_URL")
+}
+
+func (config Config) ValidateSpecialWebhook() error {
+	return validateWebhookURL(config.SpecialWebhookURL, "SPECIAL_FEISHU_WEBHOOK_URL")
+}
+
+func validateWebhookURL(raw, name string) error {
+	if raw == "" {
+		return fmt.Errorf("%s 不能为空", name)
 	}
-	parsed, err := url.Parse(config.WebhookURL)
+	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host != "open.feishu.cn" || !strings.HasPrefix(parsed.Path, "/open-apis/bot/v2/hook/") {
-		return fmt.Errorf("FEISHU_WEBHOOK_URL 必须是飞书自定义机器人的 HTTPS Webhook 地址")
+		return fmt.Errorf("%s 必须是飞书自定义机器人的 HTTPS Webhook 地址", name)
 	}
 	return nil
 }

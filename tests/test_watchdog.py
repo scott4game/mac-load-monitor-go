@@ -25,6 +25,9 @@ def make_config(**overrides):
         "webhook_url": WEBHOOK_URL,
         "webhook_secret": "",
         "keyword": "Mac 负载监控",
+        "special_webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/special-id",
+        "special_webhook_secret": "",
+        "special_keyword": "Mac 特别告警",
         "timeout_seconds": 10.0,
     }
     values.update(overrides)
@@ -52,6 +55,7 @@ class ConfigTests(unittest.TestCase):
             path.write_text(
                 "FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/id\n"
                 "FEISHU_WEBHOOK_SECRET='secret # value'\n"
+                "SPECIAL_FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/special\n"
                 "HTTP_TIMEOUT=1m30s\n",
                 encoding="utf-8",
             )
@@ -62,6 +66,10 @@ class ConfigTests(unittest.TestCase):
     def test_rejects_non_feishu_webhook(self):
         with self.assertRaises(watchdog.WatchdogError):
             make_config(webhook_url="https://example.com/hook").validate_webhook()
+
+    def test_rejects_non_feishu_special_webhook(self):
+        with self.assertRaises(watchdog.WatchdogError):
+            make_config(special_webhook_url="https://example.com/hook").validate_webhook(special=True)
 
 
 class ServiceStatusTests(unittest.TestCase):
@@ -174,6 +182,28 @@ class FeishuNotifierTests(unittest.TestCase):
         )
         self.assertTrue(notifier.send("hello"))
 
+    def test_special_notifier_uses_special_endpoint_and_secret(self):
+        requested_urls = []
+
+        def opener(webhook_request, **kwargs):
+            requested_urls.append(webhook_request.full_url)
+            return FakeResponse(b'{"code": 0}')
+
+        notifier = watchdog.FeishuNotifier(
+            make_config(special_webhook_secret="special-secret"),
+            self.logger,
+            retry_delays=(),
+            clock=lambda: 1700000000,
+            opener=opener,
+            special=True,
+        )
+        payload = notifier.build_payload("special")
+        self.assertTrue(notifier.send("special"))
+        self.assertEqual(requested_urls, ["https://open.feishu.cn/open-apis/bot/v2/hook/special-id"])
+        key = b"1700000000\nspecial-secret"
+        expected = base64.b64encode(hmac.new(key, digestmod=hashlib.sha256).digest()).decode("ascii")
+        self.assertEqual(payload["sign"], expected)
+
 
 class MessageTests(unittest.TestCase):
     def test_formats_normal_and_abnormal_conclusions(self):
@@ -181,7 +211,9 @@ class MessageTests(unittest.TestCase):
         abnormal = watchdog.ServiceStatus(False, "未加载", None, False, None, "无记录", "missing")
         now = watchdog.datetime.now().astimezone()
         self.assertIn("结论: 正常", watchdog.format_message(make_config(), normal, now))
-        self.assertIn("结论: 异常", watchdog.format_message(make_config(), abnormal, now))
+        abnormal_message = watchdog.format_message(make_config(), abnormal, now)
+        self.assertIn("结论: 异常", abnormal_message)
+        self.assertTrue(abnormal_message.startswith("Mac 特别告警 |"))
 
 
 if __name__ == "__main__":

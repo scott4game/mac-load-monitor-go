@@ -11,9 +11,9 @@ macOS 硬件负载监控。程序启动后立即检查一次，之后每个整 1
 - 根文件系统 `/` 使用率达到 `90%`
 - macOS 报告影响 CPU 性能的温度压力
 
-异常期间每次检测都会推送；恢复后的第一次正常检测会推送恢复通知。磁盘吞吐按两次采样间的累计计数计算平均读写速率与 IOPS，只做状态报告，不默认触发告警。
+正常的每小时状态和恢复通知发送到普通飞书 Webhook。硬件超负荷属于特别告警，发送到独立的特别告警 Webhook；异常期间每次检测都会推送。磁盘吞吐按两次采样间的累计计数计算平均读写速率与 IOPS，只做状态报告，不默认触发告警。
 
-项目还包含一个 Python watchdog。它通过 `launchctl` 检查 Go LaunchAgent 和对应 PID，每小时第 5 分钟由当前用户的 `crontab` 执行一次。无论服务正常还是异常，都会向飞书推送一条状态消息。
+项目还包含一个 Python watchdog。它通过 `launchctl` 检查 Go LaunchAgent 和对应 PID，每小时第 5 分钟由当前用户的 `crontab` 执行一次。服务正常时发送到普通 Webhook；服务异常时只发送到特别告警 Webhook。
 
 ## 配置
 
@@ -28,9 +28,13 @@ chmod 600 .env
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
 FEISHU_WEBHOOK_SECRET=
 FEISHU_KEYWORD=Mac 负载监控
+
+SPECIAL_FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_SPECIAL
+SPECIAL_FEISHU_WEBHOOK_SECRET=
+SPECIAL_FEISHU_KEYWORD=Mac 特别告警
 ```
 
-如果机器人启用了签名校验，将密钥填入 `FEISHU_WEBHOOK_SECRET`。其余周期和阈值可参考 `.env.example` 修改，时长采用 Go 格式，例如 `10m`、`1h`、`30s`。
+普通机器人和特别告警机器人可以分别启用签名校验。对应密钥填写到 `FEISHU_WEBHOOK_SECRET` 和 `SPECIAL_FEISHU_WEBHOOK_SECRET`。其余周期和阈值可参考 `.env.example` 修改，时长采用 Go 格式，例如 `10m`、`1h`、`30s`。
 
 进程排行只包含 PID、程序名和占用，不发送完整命令行或参数。Webhook 与密钥不会写入日志。
 
@@ -42,6 +46,9 @@ go run . --env .env --once
 
 # 发送飞书测试消息
 go run . --env .env --test-alert
+
+# 发送特别告警测试消息
+go run . --env .env --test-special-alert
 
 # 前台运行常驻监控
 go run . --env .env
@@ -62,7 +69,27 @@ chmod +x install.sh
 ./install.sh
 ```
 
-安装程序会运行 Go 与 Python 测试、构建当前 Mac 原生架构程序、发送一条飞书测试消息，然后安装并启动 `com.local.mac-load-monitor-go` LaunchAgent。它还会幂等更新 watchdog 的 cron 区块，不会覆盖已有的其他 cron 任务。现有旧版 Python 负载监控服务会被停止，但源码和配置不会删除。
+安装程序会运行 Go 与 Python 测试、构建当前 Mac 原生架构程序，并分别向普通和特别告警 Webhook 发送测试消息，然后安装并启动 `com.local.mac-load-monitor-go` LaunchAgent。它还会幂等更新 watchdog 的 cron 区块，不会覆盖已有的其他 cron 任务。现有旧版 Python 负载监控服务会被停止，但源码和配置不会删除。
+
+## 更新与重启
+
+更新代码后重新运行安装脚本即可。脚本会重新测试和构建、覆盖已安装的 Go 程序与 watchdog、更新 cron，并重启 LaunchAgent：
+
+```bash
+cd /Users/scottzh/workspace_starwar_proj/tools/mac-load-monitor-go
+git pull --ff-only
+./install.sh
+```
+
+项目目录中的 `.env` 是配置源；修改 Webhook、周期或阈值后，也应重新运行 `./install.sh`，将配置复制到安装目录并重启服务。
+
+只重启 Go 监控、不更新程序和配置时执行：
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.local.mac-load-monitor-go"
+```
+
+Python watchdog 不是常驻进程，不需要重启。它由 cron 每小时启动一次；重新运行 `./install.sh` 会更新脚本和 cron。也可以用后文的命令立即手动执行一次。
 
 安装路径：
 

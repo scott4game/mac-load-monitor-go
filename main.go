@@ -19,6 +19,7 @@ func run() int {
 	envPath := flag.String("env", ".env", "配置文件路径")
 	once := flag.Bool("once", false, "采样一次并输出，不推送")
 	testAlert := flag.Bool("test-alert", false, "发送一条飞书测试消息")
+	testSpecialAlert := flag.Bool("test-special-alert", false, "发送一条特别告警测试消息")
 	flag.Parse()
 
 	logger := log.New(os.Stderr, "", log.Ldate|log.Ltime|log.Lmicroseconds)
@@ -31,10 +32,33 @@ func run() int {
 		logger.Printf("ERROR 启动失败: %v", err)
 		return 2
 	}
+	selectedModes := 0
+	for _, selected := range []bool{*once, *testAlert, *testSpecialAlert} {
+		if selected {
+			selectedModes++
+		}
+	}
+	if selectedModes > 1 {
+		logger.Printf("ERROR --once、--test-alert 和 --test-special-alert 不能同时使用")
+		return 2
+	}
+	specialConfig := config.Special()
 	if !*once {
-		if err := config.ValidateWebhook(); err != nil {
-			logger.Printf("ERROR 启动失败: %v", err)
+		var webhookErr error
+		if *testSpecialAlert {
+			webhookErr = config.ValidateSpecialWebhook()
+		} else {
+			webhookErr = config.ValidateWebhook()
+		}
+		if webhookErr != nil {
+			logger.Printf("ERROR 启动失败: %v", webhookErr)
 			return 2
+		}
+		if !*testAlert && !*testSpecialAlert {
+			if err := config.ValidateSpecialWebhook(); err != nil {
+				logger.Printf("ERROR 启动失败: %v", err)
+				return 2
+			}
 		}
 	}
 
@@ -56,7 +80,17 @@ func run() int {
 		}
 		return 1
 	}
-	monitor := NewMonitor(config, collector, notifier, logger)
+	if *testSpecialAlert {
+		specialNotifier := NewFeishuNotifier(specialConfig, logger)
+		sample := collector.Collect(ctx)
+		collector.AddTopProcesses(ctx, &sample, config.TopProcessCount)
+		breaches := []Breach{{Metric: "测试", Detail: "特别告警通道"}}
+		if specialNotifier.Send(ctx, FormatMessage(specialConfig, sample, "特别告警测试", breaches)) {
+			return 0
+		}
+		return 1
+	}
+	monitor := NewMonitor(config, collector, notifier, NewFeishuNotifier(specialConfig, logger), logger)
 	if err := monitor.Run(ctx); err != nil {
 		logger.Printf("ERROR 监控异常退出: %v", err)
 		return 1

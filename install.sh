@@ -48,6 +48,7 @@ CGO_ENABLED=0 GOOS=darwin GOARCH="$GO_ARCH" /usr/bin/env go build -trimpath -ldf
 print "正在验证飞书推送……"
 chmod 600 "$SOURCE_ENV"
 "$TEMP_PROGRAM" --env "$SOURCE_ENV" --test-alert
+"$TEMP_PROGRAM" --env "$SOURCE_ENV" --test-special-alert
 
 mkdir -p "$APP_DIR" "$LOG_DIR" "${PLIST_PATH:h}"
 install -m 755 "$TEMP_PROGRAM" "$PROGRAM_PATH"

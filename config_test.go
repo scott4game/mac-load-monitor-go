@@ -27,6 +27,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if config.CPUThresholdPercent != 90 || config.MemoryAvailableThresholdPercent != 20 || config.DiskUsageThresholdPercent != 90 {
 		t.Fatalf("unexpected thresholds: %+v", config)
 	}
+	if config.SpecialKeyword != "Mac 特别告警" {
+		t.Fatalf("unexpected special keyword: %s", config.SpecialKeyword)
+	}
 }
 
 func TestLoadConfigEnvironmentOverridesFile(t *testing.T) {
@@ -48,6 +51,24 @@ func TestValidateWebhook(t *testing.T) {
 	invalid := Config{WebhookURL: "https://example.com/hook/secret"}
 	if err := invalid.ValidateWebhook(); err == nil {
 		t.Fatal("expected invalid webhook error")
+	}
+}
+
+func TestSpecialConfigUsesSeparateEndpoint(t *testing.T) {
+	config := Config{
+		WebhookURL:           "https://open.feishu.cn/open-apis/bot/v2/hook/normal",
+		WebhookSecret:        "normal-secret",
+		Keyword:              "normal",
+		SpecialWebhookURL:    "https://open.feishu.cn/open-apis/bot/v2/hook/special",
+		SpecialWebhookSecret: "special-secret",
+		SpecialKeyword:       "special",
+	}
+	special := config.Special()
+	if special.WebhookURL != config.SpecialWebhookURL || special.WebhookSecret != config.SpecialWebhookSecret || special.Keyword != config.SpecialKeyword {
+		t.Fatalf("unexpected special config: %+v", special)
+	}
+	if err := config.ValidateSpecialWebhook(); err != nil {
+		t.Fatal(err)
 	}
 }
 

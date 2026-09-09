@@ -49,6 +49,9 @@ class Config:
     webhook_url: str
     webhook_secret: str
     keyword: str
+    special_webhook_url: str
+    special_webhook_secret: str
+    special_keyword: str
     timeout_seconds: float
     label: str = DEFAULT_LABEL
 
@@ -62,22 +65,35 @@ class Config:
         keyword = value("FEISHU_KEYWORD", "Mac 负载监控")
         if not keyword:
             raise WatchdogError("FEISHU_KEYWORD 不能为空")
+        special_keyword = value("SPECIAL_FEISHU_KEYWORD", "Mac 特别告警")
+        if not special_keyword:
+            raise WatchdogError("SPECIAL_FEISHU_KEYWORD 不能为空")
         timeout = parse_duration_seconds(value("HTTP_TIMEOUT", "10s"))
         return cls(
             webhook_url=value("FEISHU_WEBHOOK_URL"),
             webhook_secret=value("FEISHU_WEBHOOK_SECRET"),
             keyword=keyword,
+            special_webhook_url=value("SPECIAL_FEISHU_WEBHOOK_URL"),
+            special_webhook_secret=value("SPECIAL_FEISHU_WEBHOOK_SECRET"),
+            special_keyword=special_keyword,
             timeout_seconds=timeout,
         )
 
-    def validate_webhook(self) -> None:
-        parsed = parse.urlparse(self.webhook_url)
+    def endpoint(self, special: bool) -> tuple[str, str]:
+        if special:
+            return self.special_webhook_url, self.special_webhook_secret
+        return self.webhook_url, self.webhook_secret
+
+    def validate_webhook(self, special: bool = False) -> None:
+        webhook_url, _ = self.endpoint(special)
+        parsed = parse.urlparse(webhook_url)
         if (
             parsed.scheme != "https"
             or parsed.netloc != "open.feishu.cn"
             or not parsed.path.startswith("/open-apis/bot/v2/hook/")
         ):
-            raise WatchdogError("FEISHU_WEBHOOK_URL 必须是飞书自定义机器人的 HTTPS Webhook 地址")
+            name = "SPECIAL_FEISHU_WEBHOOK_URL" if special else "FEISHU_WEBHOOK_URL"
+            raise WatchdogError(f"{name} 必须是飞书自定义机器人的 HTTPS Webhook 地址")
 
 
 @dataclass(frozen=True)
@@ -190,12 +206,13 @@ def check_service(
 
 def format_message(config: Config, status: ServiceStatus, now: datetime) -> str:
     conclusion = "正常" if status.healthy else "异常"
+    keyword = config.keyword if status.healthy else config.special_keyword
     pid_text = str(status.pid) if status.pid is not None else "无"
     alive_text = "存活" if status.pid_alive else "不存在"
     runs_text = str(status.runs) if status.runs is not None else "未知"
     return "\n".join(
         [
-            f"{config.keyword} | Go 监控服务状态",
+            f"{keyword} | Go 监控服务状态",
             f"主机: {socket.gethostname()}",
             f"时间: {now.astimezone().strftime('%Y-%m-%d %H:%M:%S %z')}",
             f"结论: {conclusion}",
@@ -217,6 +234,7 @@ class FeishuNotifier:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
         opener: Callable[..., object] = request.urlopen,
+        special: bool = False,
     ) -> None:
         self.config = config
         self.logger = logger
@@ -224,12 +242,13 @@ class FeishuNotifier:
         self.sleep = sleep
         self.clock = clock
         self.opener = opener
+        self.webhook_url, self.webhook_secret = config.endpoint(special)
 
     def build_payload(self, text: str) -> Dict[str, object]:
         payload: Dict[str, object] = {"msg_type": "text", "content": {"text": text}}
-        if self.config.webhook_secret:
+        if self.webhook_secret:
             timestamp = str(int(self.clock()))
-            signing_key = f"{timestamp}\n{self.config.webhook_secret}".encode("utf-8")
+            signing_key = f"{timestamp}\n{self.webhook_secret}".encode("utf-8")
             digest = hmac.new(signing_key, digestmod=hashlib.sha256).digest()
             payload["timestamp"] = timestamp
             payload["sign"] = base64.b64encode(digest).decode("ascii")
@@ -238,7 +257,7 @@ class FeishuNotifier:
     def _post(self, payload: Dict[str, object]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         webhook_request = request.Request(
-            self.config.webhook_url,
+            self.webhook_url,
             data=body,
             headers={"Content-Type": "application/json; charset=utf-8"},
             method="POST",
@@ -306,8 +325,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.dry_run:
             print(message)
             return 0
-        config.validate_webhook()
-        return 0 if FeishuNotifier(config, logger).send(message) else 1
+        special = not status.healthy
+        config.validate_webhook(special=special)
+        return 0 if FeishuNotifier(config, logger, special=special).send(message) else 1
     except WatchdogError as exc:
         logger.error("watchdog 执行失败: %s", exc)
         return 2
