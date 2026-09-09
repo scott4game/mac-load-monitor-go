@@ -13,9 +13,16 @@ macOS 硬件负载监控。程序启动后立即检查一次，之后每个整 1
 
 异常期间每次检测都会推送；恢复后的第一次正常检测会推送恢复通知。磁盘吞吐按两次采样间的累计计数计算平均读写速率与 IOPS，只做状态报告，不默认触发告警。
 
+项目还包含一个 Python watchdog。它通过 `launchctl` 检查 Go LaunchAgent 和对应 PID，每小时第 5 分钟由当前用户的 `crontab` 执行一次。无论服务正常还是异常，都会向飞书推送一条状态消息。
+
 ## 配置
 
-项目已经提供被 Git 忽略的 `.env`。填写飞书 Webhook：
+首次使用先创建被 Git 忽略的 `.env`，再填写飞书 Webhook：
+
+```bash
+cp .env.example .env
+chmod 600 .env
+```
 
 ```dotenv
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
@@ -38,6 +45,12 @@ go run . --env .env --test-alert
 
 # 前台运行常驻监控
 go run . --env .env
+
+# 检查 Go 服务状态，只打印而不推送
+/usr/bin/python3 watchdog.py --env .env --dry-run
+
+# 检查 Go 服务状态并推送飞书
+/usr/bin/python3 watchdog.py --env .env
 ```
 
 ## 安装为登录项
@@ -49,13 +62,14 @@ chmod +x install.sh
 ./install.sh
 ```
 
-安装程序会运行测试、构建当前 Mac 原生架构程序、发送一条飞书测试消息，然后安装并启动 `com.local.mac-load-monitor-go` LaunchAgent。现有 Python 监控服务会被停止，但源码和配置不会删除。
+安装程序会运行 Go 与 Python 测试、构建当前 Mac 原生架构程序、发送一条飞书测试消息，然后安装并启动 `com.local.mac-load-monitor-go` LaunchAgent。它还会幂等更新 watchdog 的 cron 区块，不会覆盖已有的其他 cron 任务。现有旧版 Python 负载监控服务会被停止，但源码和配置不会删除。
 
 安装路径：
 
 - 程序与私密配置：`~/Library/Application Support/mac-load-monitor-go`
 - 登录项：`~/Library/LaunchAgents/com.local.mac-load-monitor-go.plist`
-- 日志：`~/Library/Logs/mac-load-monitor-go/monitor.log`
+- 负载监控日志：`~/Library/Logs/mac-load-monitor-go/monitor.log`
+- 存活上报日志：`~/Library/Logs/mac-load-monitor-go/watchdog.log`
 
 ```bash
 # 查看服务状态
@@ -67,8 +81,17 @@ launchctl kickstart -k "gui/$(id -u)/com.local.mac-load-monitor-go"
 # 查看日志
 tail -f "$HOME/Library/Logs/mac-load-monitor-go/monitor.log"
 
+# 查看每小时存活上报任务
+crontab -l
+
+# 立即执行一次存活检查并推送
+/usr/bin/python3 "$HOME/Library/Application Support/mac-load-monitor-go/watchdog.py" \
+  --env "$HOME/Library/Application Support/mac-load-monitor-go/.env"
+
 # 停止服务
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.local.mac-load-monitor-go.plist"
 ```
 
-电脑睡眠或关机时无法采样和推送。唤醒后程序只补充一次当前状态，不重放睡眠期间错过的消息。
+移除 watchdog 定时任务时运行 `crontab -e`，删除 `# BEGIN mac-load-monitor-go watchdog` 到 `# END mac-load-monitor-go watchdog` 之间的三行。
+
+电脑睡眠或关机时无法采样和推送。Go 监控唤醒后只补充一次当前状态，不重放睡眠期间错过的消息；cron 也不会补发睡眠期间错过的小时状态。
