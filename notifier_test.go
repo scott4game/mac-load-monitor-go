@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +71,33 @@ func TestNotifierRetriesServerFailure(t *testing.T) {
 	notifier.sleep = func(context.Context, time.Duration) error { return nil }
 	if !notifier.Send(context.Background(), "hello") || attempts != 3 {
 		t.Fatalf("expected success after three attempts, got %d", attempts)
+	}
+}
+
+func TestNotifierRetriesRateLimit11232AfterOneThreeAndFiveMinutes(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempts++
+		if attempts <= 3 {
+			_, _ = writer.Write([]byte(`{"code":11232,"msg":"frequency limited"}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+
+	delays := make([]time.Duration, 0, 3)
+	notifier := NewFeishuNotifier(notifierTestConfig(server.URL), log.New(io.Discard, "", 0))
+	notifier.sleep = func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	}
+	if !notifier.Send(context.Background(), "hello") {
+		t.Fatal("expected success after rate-limit retries")
+	}
+	expected := []time.Duration{time.Minute, 3 * time.Minute, 5 * time.Minute}
+	if !slices.Equal(delays, expected) || attempts != 4 {
+		t.Fatalf("unexpected retry sequence: delays=%v attempts=%d", delays, attempts)
 	}
 }
 

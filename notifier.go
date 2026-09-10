@@ -16,8 +16,9 @@ import (
 )
 
 type notificationError struct {
-	message   string
-	retryable bool
+	message     string
+	retryable   bool
+	retryDelays []time.Duration
 }
 
 func (err notificationError) Error() string {
@@ -75,16 +76,29 @@ func (notifier *FeishuNotifier) Send(ctx context.Context, text string) bool {
 		return false
 	}
 
-	for attempt := 0; ; attempt++ {
+	retryAttempts := make(map[string]int)
+	for {
 		sendErr := notifier.post(ctx, body)
 		if sendErr == nil {
 			return true
 		}
-		if !sendErr.retryable || attempt >= len(notifier.retryDelays) {
+		if !sendErr.retryable {
 			notifier.logger.Printf("ERROR 发送飞书消息失败: %s", sendErr.message)
 			return false
 		}
-		delay := notifier.retryDelays[attempt]
+		retryClass := "default"
+		retryDelays := notifier.retryDelays
+		if len(sendErr.retryDelays) > 0 {
+			retryClass = sendErr.message
+			retryDelays = sendErr.retryDelays
+		}
+		attempt := retryAttempts[retryClass]
+		if attempt >= len(retryDelays) {
+			notifier.logger.Printf("ERROR 发送飞书消息失败: %s", sendErr.message)
+			return false
+		}
+		delay := retryDelays[attempt]
+		retryAttempts[retryClass] = attempt + 1
 		notifier.logger.Printf("WARN 发送飞书消息失败，%s 后重试: %s", delay, sendErr.message)
 		if err := notifier.sleep(ctx, delay); err != nil {
 			return false
@@ -123,6 +137,13 @@ func (notifier *FeishuNotifier) post(ctx context.Context, body []byte) *notifica
 		return &notificationError{message: "飞书响应缺少状态码"}
 	}
 	if code != 0 {
+		if code == 11232 {
+			return &notificationError{
+				message:     "飞书业务错误码 11232（系统限流）",
+				retryable:   true,
+				retryDelays: []time.Duration{time.Minute, 3 * time.Minute, 5 * time.Minute},
+			}
+		}
 		return &notificationError{message: fmt.Sprintf("飞书业务错误码 %d", code)}
 	}
 	return nil

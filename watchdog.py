@@ -26,6 +26,7 @@ from urllib import error, parse, request
 DEFAULT_ENV_PATH = Path.home() / "Library/Application Support/mac-load-monitor-go/.env"
 DEFAULT_LABEL = "com.local.mac-load-monitor-go"
 DEFAULT_RETRY_DELAYS = (1.0, 3.0, 10.0)
+RATE_LIMIT_RETRY_DELAYS = (60.0, 180.0, 300.0)
 STATE_PATTERN = re.compile(r"^\s*state\s*=\s*(.+?)\s*$", re.MULTILINE)
 PID_PATTERN = re.compile(r"^\s*pid\s*=\s*(\d+)\s*$", re.MULTILINE)
 RUNS_PATTERN = re.compile(r"^\s*runs\s*=\s*(\d+)\s*$", re.MULTILINE)
@@ -39,9 +40,15 @@ class WatchdogError(RuntimeError):
 
 
 class NotificationError(WatchdogError):
-    def __init__(self, message: str, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        retryable: bool = False,
+        retry_delays: Sequence[float] = (),
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.retry_delays = tuple(retry_delays)
 
 
 @dataclass(frozen=True)
@@ -280,22 +287,34 @@ class FeishuNotifier:
         except (TypeError, ValueError) as exc:
             raise NotificationError("飞书响应缺少有效状态码") from exc
         if numeric_code != 0:
+            if numeric_code == 11232:
+                raise NotificationError(
+                    "飞书业务错误码 11232（系统限流）",
+                    True,
+                    RATE_LIMIT_RETRY_DELAYS,
+                )
             raise NotificationError(f"飞书业务错误码 {numeric_code}")
 
     def send(self, text: str) -> bool:
         payload = self.build_payload(text)
-        for attempt in range(len(self.retry_delays) + 1):
+        retry_attempts: Dict[Sequence[float], int] = {}
+        while True:
             try:
                 self._post(payload)
                 return True
             except NotificationError as exc:
-                if not exc.retryable or attempt >= len(self.retry_delays):
+                if not exc.retryable:
                     self.logger.error("发送飞书状态失败: %s", exc)
                     return False
-                delay = self.retry_delays[attempt]
+                retry_delays = exc.retry_delays or self.retry_delays
+                attempt = retry_attempts.get(retry_delays, 0)
+                if attempt >= len(retry_delays):
+                    self.logger.error("发送飞书状态失败: %s", exc)
+                    return False
+                delay = retry_delays[attempt]
+                retry_attempts[retry_delays] = attempt + 1
                 self.logger.warning("发送飞书状态失败，%.0f 秒后重试: %s", delay, exc)
                 self.sleep(delay)
-        return False
 
 
 def configure_logging() -> logging.Logger:

@@ -182,6 +182,25 @@ class FeishuNotifierTests(unittest.TestCase):
         )
         self.assertTrue(notifier.send("hello"))
 
+    def test_11232_retries_after_one_three_and_five_minutes(self):
+        responses = iter(
+            [
+                FakeResponse(b'{"code": 11232}'),
+                FakeResponse(b'{"code": 11232}'),
+                FakeResponse(b'{"code": 11232}'),
+                FakeResponse(b'{"code": 0}'),
+            ]
+        )
+        delays = []
+        notifier = watchdog.FeishuNotifier(
+            make_config(),
+            self.logger,
+            sleep=delays.append,
+            opener=lambda *args, **kwargs: next(responses),
+        )
+        self.assertTrue(notifier.send("hello"))
+        self.assertEqual(delays, [60.0, 180.0, 300.0])
+
     def test_special_notifier_uses_special_endpoint_and_secret(self):
         requested_urls = []
 
