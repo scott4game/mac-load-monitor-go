@@ -20,6 +20,7 @@ type Config struct {
 	SpecialKeyword                  string
 	CheckInterval                   time.Duration
 	ReportInterval                  time.Duration
+	ReportJitterMax                 time.Duration
 	CPUThresholdPercent             float64
 	MemoryAvailableThresholdPercent float64
 	DiskUsageThresholdPercent       float64
@@ -56,6 +57,9 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 	if config.ReportInterval, err = parseDuration(value("REPORT_INTERVAL", "1h"), "REPORT_INTERVAL"); err != nil {
+		return Config{}, err
+	}
+	if config.ReportJitterMax, err = parseNonNegativeDuration(value("REPORT_JITTER_MAX", "30s"), "REPORT_JITTER_MAX"); err != nil {
 		return Config{}, err
 	}
 	if config.CPUThresholdPercent, err = parsePercent(value("CPU_THRESHOLD_PERCENT", "90"), "CPU_THRESHOLD_PERCENT"); err != nil {
@@ -116,6 +120,14 @@ func parseDuration(raw, name string) (time.Duration, error) {
 	duration, err := time.ParseDuration(raw)
 	if err != nil || duration <= 0 {
 		return 0, fmt.Errorf("%s 必须是大于 0 的 Go 时长，例如 10m 或 1h", name)
+	}
+	return duration, nil
+}
+
+func parseNonNegativeDuration(raw, name string) (time.Duration, error) {
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration < 0 {
+		return 0, fmt.Errorf("%s 必须是大于或等于 0 的 Go 时长，例如 0s 或 30s", name)
 	}
 	return duration, nil
 }

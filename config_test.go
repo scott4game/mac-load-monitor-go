@@ -24,6 +24,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if config.CheckInterval != 10*time.Minute || config.ReportInterval != time.Hour {
 		t.Fatalf("unexpected intervals: %s, %s", config.CheckInterval, config.ReportInterval)
 	}
+	if config.ReportJitterMax != 30*time.Second {
+		t.Fatalf("unexpected report jitter: %s", config.ReportJitterMax)
+	}
 	if config.CPUThresholdPercent != 90 || config.MemoryAvailableThresholdPercent != 20 || config.DiskUsageThresholdPercent != 90 {
 		t.Fatalf("unexpected thresholds: %+v", config)
 	}
@@ -76,5 +79,15 @@ func TestLoadConfigRejectsBadValues(t *testing.T) {
 	_, err := LoadConfig(writeTestEnv(t, "CHECK_INTERVAL=0s\n"))
 	if err == nil {
 		t.Fatal("expected duration validation error")
+	}
+}
+
+func TestLoadConfigAllowsZeroReportJitter(t *testing.T) {
+	config, err := LoadConfig(writeTestEnv(t, "REPORT_JITTER_MAX=0s\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ReportJitterMax != 0 {
+		t.Fatalf("expected disabled jitter, got %s", config.ReportJitterMax)
 	}
 }

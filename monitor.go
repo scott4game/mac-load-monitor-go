@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"log"
+	"math/big"
 	"time"
 )
 
@@ -23,6 +25,8 @@ type Monitor struct {
 	specialNotifier messageNotifier
 	logger          *log.Logger
 	now             func() time.Time
+	jitter          func(time.Duration) time.Duration
+	sleep           func(context.Context, time.Duration) error
 	wasOverloaded   bool
 	lastSampleAt    time.Time
 }
@@ -35,11 +39,18 @@ func NewMonitor(config Config, collector sampleCollector, notifier messageNotifi
 		specialNotifier: specialNotifier,
 		logger:          logger,
 		now:             time.Now,
+		jitter:          randomReportJitter,
+		sleep:           waitForDelay,
 	}
 }
 
 func (monitor *Monitor) Run(ctx context.Context) error {
-	monitor.logger.Printf("INFO 监控启动：每 %s 检测，每 %s 报告", monitor.config.CheckInterval, monitor.config.ReportInterval)
+	monitor.logger.Printf(
+		"INFO 监控启动：每 %s 检测，每 %s 报告，定时报告随机延迟 0-%s",
+		monitor.config.CheckInterval,
+		monitor.config.ReportInterval,
+		monitor.config.ReportJitterMax,
+	)
 	monitor.collectAndHandle(ctx, false)
 	now := monitor.now()
 	nextCheck := nextAligned(now, monitor.config.CheckInterval)
@@ -82,6 +93,15 @@ func (monitor *Monitor) Run(ctx context.Context) error {
 }
 
 func (monitor *Monitor) collectAndHandle(ctx context.Context, reportDue bool) {
+	if reportDue {
+		delay := monitor.jitter(monitor.config.ReportJitterMax)
+		if delay > 0 {
+			monitor.logger.Printf("INFO 每小时状态随机延迟 %s 后发送", delay)
+			if err := monitor.sleep(ctx, delay); err != nil {
+				return
+			}
+		}
+	}
 	sample := monitor.collector.Collect(ctx)
 	monitor.lastSampleAt = monitor.now()
 	breaches := EvaluateBreaches(monitor.config, sample)
@@ -110,6 +130,29 @@ func (monitor *Monitor) collectAndHandle(ctx context.Context, reportDue bool) {
 	sent := notifier.Send(ctx, FormatMessage(messageConfig, sample, status, breaches))
 	monitor.logger.Printf("INFO %s推送%s", status, map[bool]string{true: "成功", false: "失败"}[sent])
 	monitor.wasOverloaded = overloaded
+}
+
+func randomReportJitter(maximum time.Duration) time.Duration {
+	maximumSeconds := int64(maximum / time.Second)
+	if maximumSeconds <= 0 {
+		return 0
+	}
+	randomSeconds, err := rand.Int(rand.Reader, big.NewInt(maximumSeconds+1))
+	if err != nil {
+		return 0
+	}
+	return time.Duration(randomSeconds.Int64()) * time.Second
+}
+
+func waitForDelay(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func isSamplingDiscontinuity(previous, current time.Time, interval time.Duration) bool {

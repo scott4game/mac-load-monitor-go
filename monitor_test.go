@@ -88,6 +88,39 @@ func TestHourlyNormalSampleSends(t *testing.T) {
 	}
 }
 
+func TestHourlyReportUsesConfiguredRandomDelay(t *testing.T) {
+	collector := &fakeCollector{samples: []Sample{cpuSample(10)}}
+	notifier := &fakeNotifier{}
+	specialNotifier := &fakeNotifier{}
+	config := monitorTestConfig()
+	config.ReportJitterMax = 30 * time.Second
+	monitor := NewMonitor(config, collector, notifier, specialNotifier, log.New(io.Discard, "", 0))
+	monitor.jitter = func(maximum time.Duration) time.Duration {
+		if maximum != 30*time.Second {
+			t.Fatalf("unexpected jitter maximum: %s", maximum)
+		}
+		return 17 * time.Second
+	}
+	var delayed time.Duration
+	monitor.sleep = func(_ context.Context, delay time.Duration) error {
+		delayed = delay
+		return nil
+	}
+	monitor.collectAndHandle(context.Background(), true)
+	if delayed != 17*time.Second || len(notifier.messages) != 1 {
+		t.Fatalf("unexpected delay or message count: delay=%s messages=%d", delayed, len(notifier.messages))
+	}
+}
+
+func TestRandomReportJitterStaysWithinBounds(t *testing.T) {
+	for range 100 {
+		delay := randomReportJitter(30 * time.Second)
+		if delay < 0 || delay > 30*time.Second || delay%time.Second != 0 {
+			t.Fatalf("jitter out of range: %s", delay)
+		}
+	}
+}
+
 func TestNextAlignedUsesWallClockBoundary(t *testing.T) {
 	location := time.FixedZone("SGT", 8*60*60)
 	now := time.Date(2026, 9, 9, 19, 43, 12, 0, location)
